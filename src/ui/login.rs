@@ -53,6 +53,7 @@ pub(super) fn open(
     );
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        app_id: Some(crate::desktop::APP_ID.into()),
         display_id: parent.display(cx).map(|display| display.id()),
         titlebar: Some(TitlebarOptions {
             appears_transparent: true,

@@ -52,6 +52,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (window, view) = gpui_kit::open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                // Wayland 按它匹配 desktop 条目，缺省为空时概览/Dock 没有图标。
+                app_id: Some(desktop::APP_ID.into()),
                 app_owns_titlebar_drag: true,
                 titlebar: Some(TitlebarOptions {
                     appears_transparent: true,

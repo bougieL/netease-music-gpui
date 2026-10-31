@@ -53,6 +53,7 @@ pub fn open_collect_window(parent: &Window, songs: Vec<Song>, cx: &mut App) {
     let display_id = parent.display(cx).map(|display| display.id());
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        app_id: Some(desktop::APP_ID.into()),
         display_id,
         titlebar: Some(TitlebarOptions {
             appears_transparent: true,

@@ -14,6 +14,10 @@ use crate::ui::shell::MainWindow;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
+/// Wayland 的 app_id / X11 的 WM_CLASS，同时是 Linux 安装目录与 desktop 条目名。
+/// GNOME 靠它把运行中的窗口匹配到 .desktop 图标，缺省为空会导致 Dock 显示通用图标。
+pub const APP_ID: &str = "netease-music-gpui";
+
 /// Dock 右键菜单里可触发的动作。它们只转发到播放控制器 / 音乐库。
 #[cfg(target_os = "macos")]
 mod dock_actions {
@@ -445,6 +449,7 @@ pub fn show_window(cx: &mut App) {
     let view = desktop.view.clone();
     let options = WindowOptions {
         window_bounds: Some(desktop.bounds),
+        app_id: Some(APP_ID.into()),
         app_owns_titlebar_drag: true,
         titlebar: Some(TitlebarOptions {
             appears_transparent: true,
