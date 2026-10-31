@@ -1,5 +1,4 @@
 use gpui::{Context, ReadGlobal};
-use ncm_api_rs::create_client;
 
 use crate::{
     api::MusicApi,
@@ -55,7 +54,8 @@ impl AccountState {
                 account.loading = false;
                 match result {
                     Ok(profile) => account.set_profile(profile, cx),
-                    Err(_) => {
+                    Err(error) => {
+                        log::warn!("restore account: {error}");
                         account.profile = UserProfile {
                             nickname: "未登录".into(),
                             ..Default::default()
@@ -103,7 +103,8 @@ impl AccountState {
 
     fn accept_login(&mut self, cookie: String, profile: UserProfile, cx: &mut Context<Self>) {
         self.generation = self.generation.wrapping_add(1);
-        cx.global_mut::<MusicApi>().client = create_client(Some(cookie));
+        let api = cx.global_mut::<MusicApi>();
+        api.set_session(Some(cookie));
         self.loading = false;
         self.error = None;
         self.set_profile(profile, cx);
@@ -153,7 +154,8 @@ impl AccountState {
                 account.loading = false;
                 match result {
                     Ok(Ok(())) => {
-                        cx.global_mut::<MusicApi>().client = create_client(None);
+                        let api = cx.global_mut::<MusicApi>();
+                        api.set_session(None);
                         account.profile = UserProfile {
                             nickname: "未登录".into(),
                             ..Default::default()

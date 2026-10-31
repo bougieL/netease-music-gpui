@@ -3190,8 +3190,6 @@ dependencies = [
 [[package]]
 name = "gpui-pre-windows"
 version = "0.3.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "371f9bb13f97e3bea2f8b8e5e81232bb74d735153c244ae67f7400e743925b1c"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -4612,10 +4610,12 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "cpal",
+ "embed-resource",
  "futures",
  "gpui-kit",
  "gpui-pre",
  "gpui-pre-reqwest-client",
+ "log",
  "ncm-api-rs",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -4633,7 +4633,9 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tracing-subscriber",
  "tray-icon",
+ "windows 0.62.2",
  "windows-sys 0.61.2",
 ]
 

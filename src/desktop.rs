@@ -6,17 +6,37 @@ use tray_icon::{
 };
 
 use crate::api::MusicApi;
+// 只在 macOS 的 Dock 菜单动作里用到（见下面的 dock_actions），Windows 上不需要。
+#[cfg(target_os = "macos")]
 use crate::models::PlayMode;
-use crate::playback::{PlaybackController, PlaybackEvent};
+use crate::playback::PlaybackController;
+#[cfg(target_os = "macos")]
+use crate::playback::PlaybackEvent;
 use crate::state::library::MusicLibrary;
 use crate::ui::shell::MainWindow;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-/// Wayland 的 app_id / X11 的 WM_CLASS，同时是 Linux 安装目录与 desktop 条目名。
+pub const APP_NAME: &str = "网易云音乐";
+
+/// 应用身份：macOS 的 Bundle ID、Windows 的 AppUserModelID。
+/// 交给 `cx.set_app_identity`，供任务栏与系统通知识别这是同一个应用。
+pub const APP_ID: &str = "dev.netease-music-gpui";
+
+/// Linux 专用的窗口 app_id，同时是 X11 的 WM_CLASS，也是安装目录与 desktop 条目名。
 /// GNOME 靠它把运行中的窗口匹配到 .desktop 图标，缺省为空会导致 Dock 显示通用图标。
-pub const APP_ID: &str = "netease-music-gpui";
+pub const LINUX_APP_ID: &str = "netease-music-gpui";
+
+/// 窗口选项里的 app_id：只有 Linux 需要填。
+/// macOS 与 Windows 走 `set_app_identity`，再填一次反而会和任务栏身份冲突。
+pub const fn window_app_id() -> Option<&'static str> {
+    if cfg!(target_os = "linux") {
+        Some(LINUX_APP_ID)
+    } else {
+        None
+    }
+}
 
 /// Dock 右键菜单里可触发的动作。它们只转发到播放控制器 / 音乐库。
 #[cfg(target_os = "macos")]
@@ -50,6 +70,8 @@ struct Desktop {
     bounds: WindowBounds,
     /// 「收藏到歌单」弹窗的句柄；为空表示当前没有打开。同一时刻只允许存在一个。
     collect_window: Option<AnyWindowHandle>,
+    /// 「发布评论」小窗的句柄；为空表示当前没有打开。同一时刻只允许存在一个。
+    comment_window: Option<AnyWindowHandle>,
     _tray: Option<TrayIcon>,
     #[cfg(target_os = "macos")]
     _dock_subscriptions: Vec<Subscription>,
@@ -74,6 +96,7 @@ pub fn init(
         library: library.clone(),
         bounds,
         collect_window: None,
+        comment_window: None,
         _tray: None,
         #[cfg(target_os = "macos")]
         _dock_subscriptions: Vec::new(),
@@ -86,7 +109,7 @@ pub fn init(
     cx.spawn(async |cx| {
         cx.update(|cx| match create_tray(cx) {
             Ok(tray) => cx.global_mut::<Desktop>()._tray = Some(tray),
-            Err(error) => eprintln!("系统托盘初始化失败：{error}"),
+            Err(error) => log::warn!("系统托盘初始化失败：{error}"),
         });
     })
     .detach();
@@ -110,6 +133,16 @@ pub(crate) fn collect_window(cx: &App) -> Option<AnyWindowHandle> {
 /// 记录 / 清除收藏弹窗句柄。窗口关闭后必须清掉，否则会留下一个失效句柄。
 pub(crate) fn set_collect_window(window: Option<AnyWindowHandle>, cx: &mut App) {
     cx.global_mut::<Desktop>().collect_window = window;
+}
+
+/// 当前打开发布评论小窗的句柄；`None` 表示没有打开。
+pub(crate) fn comment_window(cx: &App) -> Option<AnyWindowHandle> {
+    cx.try_global::<Desktop>()?.comment_window
+}
+
+/// 记录 / 清除发布评论小窗句柄。窗口关闭后必须清掉，否则会留下一个失效句柄。
+pub(crate) fn set_comment_window(window: Option<AnyWindowHandle>, cx: &mut App) {
+    cx.global_mut::<Desktop>().comment_window = window;
 }
 
 /// macOS Dock 右键菜单：播放控制、喜欢开关、播放方式。
@@ -239,7 +272,7 @@ fn dock_menu_state(
             .snapshot()
             .current_song
             .as_ref()
-            .is_some_and(|song| library.read(cx).liked_song_ids.contains(&song.id)),
+            .is_some_and(|song| library.read(cx).is_liked(song.id)),
         heart_reachable: player.heart_reachable(),
     }
 }
@@ -323,7 +356,7 @@ pub fn handle_open_urls(urls: Vec<String>, cx: &mut App) {
     for url in urls {
         match parse_orpheus_url(&url) {
             Some(target) => targets.push(target),
-            None => eprintln!("忽略无法识别的唤起链接：{url}"),
+            None => log::warn!("忽略无法识别的唤起链接"),
         }
     }
     if targets.is_empty() {
@@ -369,7 +402,7 @@ fn play_orpheus_target(target: OrpheusTarget, playback: Entity<PlaybackControlle
         let songs = match fetched {
             Ok(songs) => songs,
             Err(error) => {
-                eprintln!("打开网页唤起的内容失败：{error}");
+                log::warn!("打开网页唤起的内容失败：{error}");
                 return;
             }
         };
@@ -379,6 +412,33 @@ fn play_orpheus_target(target: OrpheusTarget, playback: Entity<PlaybackControlle
         });
     })
     .detach();
+}
+
+/// GPUI 0.3.8 的 Windows zoom() 只最大化，按钮的第二次点击需显式还原。
+pub fn toggle_maximize(window: &Window) {
+    #[cfg(target_os = "windows")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            IsZoomed, SW_MAXIMIZE, SW_RESTORE, ShowWindowAsync,
+        };
+        if let Ok(handle) = HasWindowHandle::window_handle(window)
+            && let RawWindowHandle::Win32(handle) = handle.as_raw()
+        {
+            let hwnd = handle.hwnd.get() as _;
+            // 异步派发，避免原生 resize 回调重入 GPUI 的点击处理。
+            unsafe {
+                let command = if IsZoomed(hwnd) != 0 {
+                    SW_RESTORE
+                } else {
+                    SW_MAXIMIZE
+                };
+                ShowWindowAsync(hwnd, command);
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    window.zoom_window();
 }
 
 pub fn configure_window(window: &Window, cx: &App) {
@@ -416,7 +476,7 @@ pub fn close_window(window: &mut Window, cx: &mut App) {
             handle
                 .update(cx, |_, window, _| {
                     if let Err(error) = hide_native_window(window) {
-                        eprintln!("隐藏窗口失败：{error}");
+                        log::warn!("隐藏窗口失败：{error}");
                     }
                 })
                 .ok();
@@ -435,7 +495,7 @@ pub fn show_window(cx: &mut App) {
         .update(cx, |_, window, cx| {
             #[cfg(target_os = "windows")]
             if let Err(error) = show_native_window(window) {
-                eprintln!("显示窗口失败：{error}");
+                log::warn!("显示窗口失败：{error}");
             }
             cx.activate(true);
             window.activate_window();
@@ -449,9 +509,10 @@ pub fn show_window(cx: &mut App) {
     let view = desktop.view.clone();
     let options = WindowOptions {
         window_bounds: Some(desktop.bounds),
-        app_id: Some(APP_ID.into()),
+        app_id: window_app_id().map(String::from),
         app_owns_titlebar_drag: true,
         titlebar: Some(TitlebarOptions {
+            title: Some(APP_NAME.into()),
             appears_transparent: true,
             ..Default::default()
         }),
@@ -465,7 +526,7 @@ pub fn show_window(cx: &mut App) {
             cx.global_mut::<Desktop>().window = window;
             cx.activate(true);
         }
-        Err(error) => eprintln!("显示窗口失败：{error}"),
+        Err(error) => log::warn!("显示窗口失败：{error}"),
     }
 }
 

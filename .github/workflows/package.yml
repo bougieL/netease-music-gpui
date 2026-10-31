@@ -76,15 +76,15 @@ jobs:
         with:
           key: ${{ hashFiles('scripts/prepare_gpui.py', 'vendor/patches/*.patch') }}
           cache-on-failure: true
+      # 脚本自己产出免安装 ZIP 和 sha256 校验文件，运行时库也放在 EXE 旁边
       - name: Build and bundle
         run: python scripts/package.py
-      - name: Zip bundle
-        shell: pwsh
-        run: Compress-Archive -Path target/bundle/netease-music-gpui/* -DestinationPath netease-music-gpui-windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: netease-music-gpui-windows-x64
-          path: netease-music-gpui-windows-x64.zip
+          path: |
+            target/bundle/*.zip
+            target/bundle/*.sha256
 
   # 22.04 的 glibc 更老，产物能在更多发行版上运行；apt 包名也与 24.04 的 t64 过渡无关
   linux-x64:

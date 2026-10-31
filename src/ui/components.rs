@@ -9,6 +9,7 @@ use gpui_kit::base::input::InputState;
 
 use crate::ui::theme::PRESSED_ICON_ALPHA;
 
+mod balloon;
 mod collect_window;
 mod drag_preview;
 mod message_panel;
@@ -17,12 +18,14 @@ mod player_bar;
 mod playing_indicator;
 mod popover;
 mod progress_bar;
+mod selectable_text;
 mod side_panel;
 mod song_menu;
 mod song_table;
 mod spinner;
 mod tab_bar;
 mod text;
+mod toast;
 mod vinyl;
 mod vinyl_stage;
 mod virtual_table;
@@ -32,6 +35,7 @@ pub use collect_window::open_collect_window;
 pub use drag_preview::ResizeDragPreview;
 pub use player_bar::{PLAYER_BAR_HEIGHT, PlayerBar};
 pub use playing_indicator::PlayingIndicator;
+pub(in crate::ui) use selectable_text::SelectableText;
 pub use side_panel::{SidePanel, SidePanelContent};
 pub use song_menu::{Collect, PlayNext, show_song_menu};
 // 播放队列浮层、音质弹窗、账号弹层共用同一份圆角与投影；
@@ -46,6 +50,7 @@ pub use spinner::spinner;
 pub use tab_bar::{TabBar, TabChanged, TabItem};
 use text::match_highlight;
 pub(super) use text::{keyword_ranges, match_highlights, text_with_matches};
+pub use toast::{Toast, ToastHandle};
 pub(in crate::ui) use vinyl::{RotationClock, Vinyl};
 pub use vinyl_stage::{Tonearm, vinyl_stage};
 pub use virtual_table::{
@@ -61,6 +66,9 @@ pub use virtual_table::{
 pub(super) const LAYER_PROGRESS_BAR: usize = 1;
 pub(super) const LAYER_POPOVER: usize = 2;
 pub(super) const LAYER_VOLUME_BALLOON: usize = gpui_kit::base::POPUP_PRIORITY + 1;
+// 「已添加至播放列表」提示浮在播放列表按钮上方，会探出播放栏上沿压到进度条，
+// 所以排在进度条之后；它和音量气泡、弹层都不重叠，用不着抢 `POPUP_PRIORITY`。
+pub(super) const LAYER_QUEUE_HINT: usize = 3;
 
 /// 暗背景图标只稍微提亮，浅背景仍使用主题前景色。
 pub(super) fn icon_hover_color(mut base: Hsla, colors: ColorTokens) -> Hsla {

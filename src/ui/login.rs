@@ -53,9 +53,10 @@ pub(super) fn open(
     );
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        app_id: Some(crate::desktop::APP_ID.into()),
+        app_id: crate::desktop::window_app_id().map(String::from),
         display_id: parent.display(cx).map(|display| display.id()),
         titlebar: Some(TitlebarOptions {
+            title: Some(format!("登录 - {}", crate::desktop::APP_NAME).into()),
             appears_transparent: true,
             ..Default::default()
         }),
@@ -71,7 +72,7 @@ pub(super) fn open(
     }) {
         Ok((handle, _)) => Some(handle),
         Err(error) => {
-            eprintln!("打开登录窗口失败：{error}");
+            log::warn!("打开登录窗口失败：{error}");
             None
         }
     }

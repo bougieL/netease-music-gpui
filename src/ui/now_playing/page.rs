@@ -11,7 +11,7 @@ use super::{NowPlaying, NowPlayingEvent};
 use crate::playback::{PlaybackController, PlaybackEvent};
 use crate::state::library::MusicLibrary;
 use crate::ui::assets::track_cover_url;
-use crate::ui::comments::{CommentResource, CommentsView, ListMode};
+use crate::ui::comments::{CommentResource, CommentsView, ListMode, open_comment_window};
 use crate::ui::components::{PLAYER_BAR_HEIGHT, Tonearm, Vinyl, format_duration, window_drag_area};
 use crate::ui::cover_color::{
     Backdrop, CoverColor, CoverGradient, dark_colors, dark_gradient, gradient_layer,
@@ -102,7 +102,7 @@ impl NowPlayingPage {
         let scroll = ScrollHandle::default();
         let lyrics = cx.new(|cx| LyricsView::new(playback.clone(), backdrop.clone(), cx));
         // 评论区自己吃不下滚轮位移时让事件冒泡，交给外层平台滚动。
-        let comments = cx.new(|_| CommentsView::new(Some(backdrop.clone())));
+        let comments = cx.new(|cx| CommentsView::new(Some(backdrop.clone()), cx));
         let mut source = source_name(&library, &playback, cx);
         let library_playback = playback.clone();
         let library_subscription = cx.observe(&library, move |this, library, cx| {
@@ -732,6 +732,8 @@ impl Render for NowPlayingPage {
                                     // 外层是普通平台滚动：两屏按文档流上下排布，滚到第二屏就是评论区。
                                     // 嵌套的歌词 / 评论列表自己决定什么时候拦位移，到边自然交回这里。
                                     .overflow_y_scroll()
+                                    // 横向手势不改写成竖向：一次滑动只认一个方向。
+                                    .restrict_scroll_to_axis()
                                     .track_scroll(&self.scroll)
                                     // 只采样滚轮事件、不拦位移：位移照旧由平台滚动和
                                     // 评论列表分。延迟吸附靠这份采样判手停了没有、
@@ -804,7 +806,6 @@ impl Render for NowPlayingPage {
                                                 )
                                                 .child(
                                                     Button::new("publish-song-comment")
-                                                        .disabled(true)
                                                         .w(px(152.))
                                                         .h(px(40.))
                                                         .rounded_full()
@@ -819,10 +820,53 @@ impl Render for NowPlayingPage {
                                                                 1.,
                                                             ),
                                                         ))
+                                                        // 悬停时整体降亮：用更暗的渐变替换，质感仍是实心玻璃。
+                                                        .hover(|style| {
+                                                            style.bg(linear_gradient(
+                                                                180.,
+                                                                linear_color_stop(
+                                                                    white().alpha(0.18),
+                                                                    0.,
+                                                                ),
+                                                                linear_color_stop(
+                                                                    white().alpha(0.09),
+                                                                    1.,
+                                                                ),
+                                                            ))
+                                                        })
                                                         .border_1()
                                                         .border_color(white().alpha(0.10))
                                                         .text_color(white())
-                                                        .child("发布评论"),
+                                                        // 挡住下方评论列表的鼠标事件（点击/悬停），
+                                                        // 但放行滚轮，列表仍能继续滚。
+                                                        .block_mouse_except_scroll()
+                                                        .on_click({
+                                                            let comments = self.comments.clone();
+                                                            move |_, window, cx| {
+                                                                // 这一屏没有编辑框，弹一个
+                                                                // 小窗出来写评论。
+                                                                open_comment_window(
+                                                                    window,
+                                                                    comments.clone(),
+                                                                    cx,
+                                                                );
+                                                            }
+                                                        })
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .items_center()
+                                                                .justify_center()
+                                                                .gap_2()
+                                                                .child(
+                                                                    svg()
+                                                                        .path("icons/edit.svg")
+                                                                        .size(px(22.))
+                                                                        .flex_none()
+                                                                        .text_color(white()),
+                                                                )
+                                                                .child("发布评论"),
+                                                        ),
                                                 ),
                                         ),
                                 )
@@ -847,7 +891,7 @@ fn source_name(
     let id = playback.read(cx).playlist_id()?;
     library
         .read(cx)
-        .playlists
+        .playlists()
         .iter()
         .find(|playlist| playlist.id == id)
         .map(|playlist| playlist.name.clone())

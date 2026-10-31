@@ -1,10 +1,12 @@
-use std::time::Duration;
+use std::{cell::Cell, rc::Rc, time::Duration};
 
+use gpui::prelude::{FluentBuilder, StatefulInteractiveElement};
 use gpui::*;
-use gpui_kit::base::{Button, ColorTokens, Theme};
+use gpui_kit::base::{
+    Button, ColorTokens, MotionStatus, Theme, Transition, transition_with_status,
+};
 
-use crate::models::{FeaturedActivity, PlayMode, Playlist, RecommendedPlaylist};
-use crate::playback::{PlaybackController, PlaybackEvent};
+use crate::models::{FeaturedActivity, Playlist, RecommendedPlaylist};
 use crate::state::daily::DailySongsStore;
 use crate::state::library::MusicLibrary;
 use crate::state::recommend::{QuickEntry, QuickEntryKind, RecommendStore};
@@ -20,26 +22,23 @@ const COVER_RADIUS: Pixels = px(8.);
 const SPIN_PERIOD: Duration = Duration::from_millis(900);
 const CARD_TEXT_HEIGHT: Pixels = px(48.);
 const TARGET_CARD_WIDTH: f32 = 135.;
+const ROW_ARROW_SIZE: f32 = 26.;
+const ROW_ARROW_ICON: f32 = 20.;
+const ROW_SCROLL_DURATION: Duration = Duration::from_millis(300);
 const PLACEHOLDER_COVER: &str = "images/trackBlank.png";
-
-struct PendingHeartPlayback {
-    user_id: u64,
-    revision: u64,
-    mode: PlayMode,
-    play_requested: bool,
-}
 
 /// shell 通过 content 注入可用宽度，所有区块共用同一列数。
 pub struct RecommendPage {
     store: Entity<RecommendStore>,
     _store_subscription: Subscription,
-    _playback_subscription: Subscription,
-    pending_heart: Option<PendingHeartPlayback>,
+    _daily_subscription: Subscription,
     daily: Entity<DailySongsStore>,
     library: Entity<MusicLibrary>,
-    playback: Entity<PlaybackController>,
     /// 与 entries 按下标对齐，新封面加载中保留上一张的颜色。
     entry_colors: Vec<CoverColor>,
+    entries_scroll: CardScroll,
+    playlists_scroll: CardScroll,
+    radar_scroll: CardScroll,
 }
 
 impl RecommendPage {
@@ -47,48 +46,27 @@ impl RecommendPage {
         store: Entity<RecommendStore>,
         daily: Entity<DailySongsStore>,
         library: Entity<MusicLibrary>,
-        playback: Entity<PlaybackController>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let subscription = cx.observe(&store, |this, store, cx| {
-            if let Some(pending) = &this.pending_heart {
-                let user_id = pending.user_id;
-                let store = store.read(cx);
-                if this.library.read(cx).user_id != user_id || !store.heart_loading {
-                    this.pending_heart = None;
-                    if this.library.read(cx).user_id == user_id
-                        && let Some(heart) = store.heart.clone()
-                    {
-                        this.playback.update(cx, |playback, cx| {
-                            playback.play_heart_recommendation(user_id, heart, cx);
-                        });
-                    }
-                }
-            }
-            cx.notify();
-        });
-        let playback_subscription = cx.subscribe(&playback, |this, playback, event, cx| {
-            if matches!(event, PlaybackEvent::SnapshotChanged) {
-                let playback = playback.read(cx);
-                if this.pending_heart.as_ref().is_some_and(|pending| {
-                    pending.revision != playback.snapshot().revision
-                        || pending.mode != playback.snapshot().mode
-                        || pending.play_requested != playback.is_play_requested()
-                }) {
-                    this.pending_heart = None;
-                }
-            }
-        });
+        let subscription = cx.observe(&store, |_, _, cx| cx.notify());
+        let daily_subscription = cx.observe(&daily, |_, _, cx| cx.notify());
         Self {
             store,
             _store_subscription: subscription,
-            _playback_subscription: playback_subscription,
-            pending_heart: None,
+            _daily_subscription: daily_subscription,
             daily,
             library,
-            playback,
             entry_colors: Vec::new(),
+            entries_scroll: CardScroll::default(),
+            playlists_scroll: CardScroll::default(),
+            radar_scroll: CardScroll::default(),
         }
+    }
+
+    /// 切回本页时静默刷新一次：离开期间推荐内容可能变了。
+    pub fn revalidate(&mut self, cx: &mut Context<Self>) {
+        self.store.update(cx, |store, cx| store.revalidate(cx));
+        self.daily.update(cx, |daily, cx| daily.revalidate(cx));
     }
 
     pub fn content(
@@ -98,6 +76,13 @@ impl RecommendPage {
         cx: &mut App,
     ) -> AnyElement {
         view.update(cx, |this, cx| {
+            for (id, scroll) in [
+                ("recommend-entries-motion", &this.entries_scroll),
+                ("recommend-playlist-motion", &this.playlists_scroll),
+                ("recommend-radar-motion", &this.radar_scroll),
+            ] {
+                scroll.step(id, window, cx);
+            }
             let covers = this.entry_covers(cx);
             this.entry_colors
                 .resize_with(covers.len(), CoverColor::default);
@@ -113,29 +98,46 @@ impl RecommendPage {
         let daily_cover = self
             .daily
             .read(cx)
-            .songs
+            .songs()
             .first()
             .and_then(|song| song.al.pic_url.as_deref());
         store
             .entries
+            .value()
+            .map(|entries| entries.as_slice())
+            .unwrap_or(&[])
             .iter()
             .map(|entry| match entry.kind {
                 QuickEntryKind::DailySongs if daily_cover.is_some() => {
                     track_cover_url(daily_cover, 300).into()
                 }
                 QuickEntryKind::HeartMode => {
-                    let cover = store
-                        .heart
-                        .as_ref()
-                        .and_then(|heart| heart.songs.first())
-                        .and_then(|song| song.al.pic_url.as_deref());
+                    // 心动模式的封面就是「我喜欢的音乐」那张歌单封面，
+                    // 音乐库里已经有了，不必为它单独请求。
+                    let cover = self
+                        .library
+                        .read(cx)
+                        .favorite_playlist()
+                        .and_then(|playlist| playlist.cover_img_url.as_deref());
                     cover.map_or_else(
                         || PLACEHOLDER_COVER.into(),
                         |cover| track_cover_url(Some(cover), 300).into(),
                     )
                 }
-                QuickEntryKind::Radar if store.radar_first_song_cover.is_some() => {
-                    track_cover_url(store.radar_first_song_cover.as_deref(), 300).into()
+                QuickEntryKind::Radar
+                    if store
+                        .radar_first_song_cover
+                        .value()
+                        .is_some_and(Option::is_some) =>
+                {
+                    track_cover_url(
+                        store
+                            .radar_first_song_cover
+                            .value()
+                            .and_then(|cover| cover.as_deref()),
+                        300,
+                    )
+                    .into()
                 }
                 _ => match &entry.cover {
                     Some(cover) => track_cover_url(Some(cover), 300).into(),
@@ -156,69 +158,66 @@ impl RecommendPage {
             .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
             .day();
         let store = self.store.read(cx);
-        let mut entries = store.entries.clone();
+        let mut entries = store.entries.value().cloned().unwrap_or_default();
         for entry in &mut entries {
             if entry.kind == QuickEntryKind::HeartMode {
-                entry.caption = if let Some(song) =
-                    store.heart.as_ref().and_then(|heart| heart.songs.first())
-                {
-                    format!("心动模式 | 从「{}」听起", song.name).into()
-                } else if store.heart_loading {
-                    "正在准备心动推荐…".into()
-                } else if let Some(error) = &store.heart_error {
-                    format!("{error} · 点击重试").into()
-                } else if self.library.read(cx).user_id == 0 {
+                // 推荐流是点开时现取的，卡片上预告不了第一首，
+                // 只说明它从哪儿起播。
+                entry.caption = if self.library.read(cx).user_id == 0 {
                     "登录后从你喜欢的歌听起".into()
                 } else {
                     "你的红心歌曲和更多相似推荐".into()
                 };
             }
             if entry.kind == QuickEntryKind::DailySongs {
-                entry.caption = self.daily.read(cx).songs.first().map_or_else(
+                entry.caption = self.daily.read(cx).songs().first().map_or_else(
                     || "每日推荐".into(),
                     |song| format!("每日推荐 | 从「{}」听起", song.name).into(),
                 );
             }
         }
-        let natural_columns = columns_for(available_width);
-        let columns = if entries.is_empty() {
-            natural_columns
-        } else {
-            natural_columns.min(entries.len())
-        };
         let mut page = div().w_full().flex().flex_col().gap(SECTION_GAP);
         if !entries.is_empty() {
-            page = page.child(quick_entries(
+            let mut row = RowLayout::new(available_width, entries.len(), &self.entries_scroll);
+            row.arrow_center += CARD_TEXT_HEIGHT / 2.;
+            let cards = quick_entry_cards(
                 today,
-                columns,
+                &row,
                 &entries,
                 &self.entry_colors,
                 covers,
-                store.radar.first(),
+                store.radar.value().and_then(|radar| radar.first()),
                 cx,
-            ));
+            );
+            page = page.child(card_row("recommend-entries", &row, cards, colors, cx));
         }
-        page = page.child(self.recommended_section(columns, colors, cx));
-        if !store.radar.is_empty() {
+        page = page.child(self.recommended_section(available_width, colors, cx));
+        let radar = store
+            .radar
+            .value()
+            .map(|radar| radar.as_slice())
+            .unwrap_or(&[]);
+        if !radar.is_empty() {
+            let row = RowLayout::new(available_width, radar.len(), &self.radar_scroll);
+            let cards = playlist_cards(radar, &row, colors, "recommend-radar", cx);
             page = page.child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(16.))
                     .child(section_title("雷达歌单", colors))
-                    .child(playlist_row(
-                        &store.radar,
-                        columns,
-                        colors,
-                        "recommend-radar",
-                        cx,
-                    )),
+                    .child(card_row("recommend-radar", &row, cards, colors, cx)),
             );
         }
-        if !store.featured.is_empty() {
+        let featured = store
+            .featured
+            .value()
+            .map(|featured| featured.as_slice())
+            .unwrap_or(&[]);
+        if !featured.is_empty() {
             page = page.child(featured_activities(
                 colors,
-                &store.featured,
+                featured,
                 svg_font_family(&Theme::global(cx).tokens.typography.sans),
             ));
         }
@@ -253,57 +252,229 @@ enum QuickTarget {
     },
 }
 
-/// 卡片平分一行；窗口较窄时只显示前 columns 张。
-fn quick_entries(
+#[derive(Clone, Default)]
+struct CardScroll {
+    handle: ScrollHandle,
+    target: Rc<Cell<Option<Pixels>>>,
+}
+
+impl CardScroll {
+    fn step(&self, id: &'static str, window: &mut Window, cx: &mut App) {
+        let target = self.target.get();
+        let motion = transition_with_status(
+            id,
+            target
+                .unwrap_or_else(|| self.handle.offset().x)
+                .clamp(-self.handle.max_offset().x, px(0.)),
+            Transition::new(if target.is_some() {
+                ROW_SCROLL_DURATION
+            } else {
+                Duration::ZERO
+            })
+            .ease(ease_out_quint()),
+            window,
+            cx,
+        );
+        if target.is_some() {
+            self.handle.set_offset(point(motion.value, px(0.)));
+            if matches!(motion.status, MotionStatus::Idle | MotionStatus::Finished) {
+                self.target.set(None);
+            }
+        }
+    }
+}
+
+struct RowLayout {
+    card_width: Pixels,
+    arrow_center: Pixels,
+    content_width: Pixels,
+    overflow: Pixels,
+    scroll: CardScroll,
+}
+
+impl RowLayout {
+    fn new(available_width: Pixels, count: usize, scroll: &CardScroll) -> Self {
+        let columns = columns_for(available_width).min(count.max(1));
+        let gaps = px(CARD_GAP) * columns.saturating_sub(1) as f32;
+        let card_width = ((available_width - gaps) / columns as f32).max(px(0.));
+        let content_width =
+            card_width * count as f32 + px(CARD_GAP) * count.saturating_sub(1) as f32;
+        Self {
+            card_width,
+            arrow_center: card_width / 2.,
+            content_width,
+            overflow: (content_width - available_width).max(px(0.)),
+            scroll: scroll.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArrowDirection {
+    Left,
+    Right,
+}
+
+fn card_row(
+    id: &'static str,
+    row: &RowLayout,
+    cards: Vec<AnyElement>,
+    colors: ColorTokens,
+    cx: &Context<RecommendPage>,
+) -> impl IntoElement {
+    let offset = row.scroll.handle.offset().x.clamp(-row.overflow, px(0.));
+    let target = row.scroll.target.clone();
+
+    div()
+        .id((ElementId::Name(id.into()), "row"))
+        .relative()
+        .w_full()
+        .min_w(px(0.))
+        .child(
+            div()
+                .id(id)
+                .w_full()
+                .min_w(px(0.))
+                .flex()
+                .overflow_x_scroll()
+                // 竖向手势留给外层页面。
+                .restrict_scroll_to_axis()
+                .track_scroll(&row.scroll.handle)
+                .on_scroll_wheel(move |event, window, _| {
+                    if !event.delta.pixel_delta(window.line_height()).x.is_zero() {
+                        target.set(None);
+                    }
+                })
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .w(row.content_width)
+                        .gap(px(CARD_GAP))
+                        .children(cards),
+                ),
+        )
+        .children(
+            [ArrowDirection::Left, ArrowDirection::Right]
+                .into_iter()
+                .map(|direction| {
+                    let enabled = match direction {
+                        ArrowDirection::Left => offset < px(-0.5),
+                        ArrowDirection::Right => offset > -row.overflow + px(0.5),
+                    };
+                    scroll_arrow(id, direction, row, enabled, colors, cx)
+                }),
+        )
+}
+
+fn scroll_arrow(
+    row_id: &'static str,
+    direction: ArrowDirection,
+    row: &RowLayout,
+    enabled: bool,
+    colors: ColorTokens,
+    cx: &Context<RecommendPage>,
+) -> impl IntoElement {
+    let (tag, label) = match direction {
+        ArrowDirection::Left => ("arrow-left", "滚动到最左侧"),
+        ArrowDirection::Right => ("arrow-right", "滚动到最右侧"),
+    };
+    let scroll = row.scroll.clone();
+
+    div()
+        .id((ElementId::Name(row_id.into()), tag))
+        .absolute()
+        .top(row.arrow_center - px(ROW_ARROW_SIZE / 2.))
+        .when(direction == ArrowDirection::Left, |arrow| {
+            arrow.left(px(-ROW_ARROW_SIZE))
+        })
+        .when(direction == ArrowDirection::Right, |arrow| {
+            arrow.right(px(-ROW_ARROW_SIZE))
+        })
+        .size(px(ROW_ARROW_SIZE))
+        .flex()
+        .items_center()
+        .justify_center()
+        .role(Role::Button)
+        .aria_label(label)
+        .when(!enabled, |arrow| arrow.aria_description("已到达边界"))
+        .when(enabled, |arrow| {
+            arrow
+                .cursor_pointer()
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    // max_offset 是正的范围；实际偏移向右滚时为负，且需等布局后读取。
+                    let target = match direction {
+                        ArrowDirection::Left => px(0.),
+                        ArrowDirection::Right => -scroll.handle.max_offset().x,
+                    };
+                    scroll.target.set(Some(target));
+                    cx.notify();
+                }))
+        })
+        .child(
+            svg()
+                .path("icons/chevron_side.svg")
+                .size(px(ROW_ARROW_ICON))
+                .text_color(colors.foreground.alpha(if enabled { 0.85 } else { 0.25 }))
+                .when(direction == ArrowDirection::Left, |icon| {
+                    icon.with_transformation(Transformation::rotate(percentage(0.5)))
+                }),
+        )
+}
+
+struct EntrySkin {
+    strip: Hsla,
+    cover: SharedString,
+}
+
+fn quick_entry_cards(
     today: u8,
-    columns: usize,
+    row: &RowLayout,
     entries: &[QuickEntry],
     entry_colors: &[CoverColor],
     covers: &[SharedString],
     radar: Option<&RecommendedPlaylist>,
     cx: &Context<RecommendPage>,
-) -> impl IntoElement {
-    div()
-        .flex()
-        .gap(px(CARD_GAP))
-        .children(
-            entries
-                .iter()
-                .take(columns)
-                .enumerate()
-                .map(|(index, entry)| {
-                    let strip =
-                        dark_gradient(entry_colors.get(index).and_then(CoverColor::current)).0[0]
-                            .into();
-                    let cover = covers
-                        .get(index)
-                        .cloned()
-                        .unwrap_or_else(|| PLACEHOLDER_COVER.into());
-                    let target = match entry.kind {
-                        QuickEntryKind::DailySongs => Some(QuickTarget::DailySongs),
-                        QuickEntryKind::HeartMode => Some(QuickTarget::HeartMode),
-                        QuickEntryKind::Radar => radar.map(|playlist| QuickTarget::Playlist {
-                            id: playlist.id,
-                            summary: Box::new(playlist.to_summary()),
-                        }),
-                        _ => None,
-                    };
-                    quick_entry(entry, today, strip, cover, index, target, cx)
+) -> Vec<AnyElement> {
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let skin = EntrySkin {
+                strip: dark_gradient(entry_colors.get(index).and_then(CoverColor::current)).0[0]
+                    .into(),
+                cover: covers
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| PLACEHOLDER_COVER.into()),
+            };
+            let target = match entry.kind {
+                QuickEntryKind::DailySongs => Some(QuickTarget::DailySongs),
+                QuickEntryKind::HeartMode => Some(QuickTarget::HeartMode),
+                QuickEntryKind::Radar => radar.map(|playlist| QuickTarget::Playlist {
+                    id: playlist.id,
+                    summary: Box::new(playlist.to_summary()),
                 }),
-        )
+                _ => None,
+            };
+            quick_entry(entry, today, skin, index, row, target, cx).into_any_element()
+        })
+        .collect()
 }
 
 fn quick_entry(
     entry: &QuickEntry,
     today: u8,
-    strip: Hsla,
-    cover: SharedString,
+    skin: EntrySkin,
     index: usize,
+    row: &RowLayout,
     target: Option<QuickTarget>,
     cx: &Context<RecommendPage>,
 ) -> impl IntoElement {
+    let EntrySkin { strip, cover } = skin;
     let card = div()
-        .flex_1()
+        .flex_none()
+        .w(row.card_width)
         .min_w(px(0.))
         .flex()
         .flex_col()
@@ -385,27 +556,10 @@ fn quick_entry(
             .role(Role::Button)
             .aria_label(entry.title.clone())
             .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| match &target {
+            .on_click(cx.listener(move |_, _, _, cx| match &target {
                 QuickTarget::DailySongs => NavigationBus::emit(cx, Navigate::DailySongs),
-                QuickTarget::HeartMode => {
-                    let user_id = this.library.read(cx).user_id;
-                    let recommendation = this.store.read(cx).heart.clone();
-                    if let Some(heart) = recommendation {
-                        this.pending_heart = None;
-                        this.playback.update(cx, |playback, cx| {
-                            playback.play_heart_recommendation(user_id, heart, cx);
-                        });
-                    } else if user_id != 0 {
-                        let playback = this.playback.read(cx);
-                        this.pending_heart = Some(PendingHeartPlayback {
-                            user_id,
-                            revision: playback.snapshot().revision,
-                            mode: playback.snapshot().mode,
-                            play_requested: playback.is_play_requested(),
-                        });
-                        this.store.update(cx, |store, cx| store.load_heart(cx));
-                    }
-                }
+                // 心动模式交给上层统一发起：卡片只提交意图。
+                QuickTarget::HeartMode => NavigationBus::emit(cx, Navigate::HeartMode),
                 QuickTarget::Playlist { id, summary } => NavigationBus::emit(
                     cx,
                     Navigate::Playlist {
@@ -461,7 +615,7 @@ fn roam_badge() -> AnyElement {
 impl RecommendPage {
     fn recommended_section(
         &self,
-        columns: usize,
+        available_width: Pixels,
         colors: ColorTokens,
         cx: &Context<Self>,
     ) -> impl IntoElement {
@@ -478,11 +632,11 @@ impl RecommendPage {
                     .child(section_title("推荐歌单", colors))
                     .child(self.refresh_button(colors, cx)),
             )
-            .child(self.recommended_body(columns, colors, cx))
+            .child(self.recommended_body(available_width, colors, cx))
     }
 
     fn refresh_button(&self, colors: ColorTokens, cx: &Context<Self>) -> AnyElement {
-        let loading = self.store.read(cx).loading;
+        let loading = self.store.read(cx).playlists.is_loading();
         if loading {
             return svg()
                 .path("icons/refresh.svg")
@@ -517,12 +671,17 @@ impl RecommendPage {
 
     fn recommended_body(
         &self,
-        columns: usize,
+        available_width: Pixels,
         colors: ColorTokens,
         cx: &Context<Self>,
     ) -> AnyElement {
         let store = self.store.read(cx);
-        if store.loading && store.playlists.is_empty() {
+        let playlists = store
+            .playlists
+            .value()
+            .map(|list| list.as_slice())
+            .unwrap_or(&[]);
+        if store.playlists.is_loading() && playlists.is_empty() {
             return div()
                 .w_full()
                 .py(px(36.))
@@ -531,9 +690,9 @@ impl RecommendPage {
                 .child(spinner("recommend-loading", 20., colors.muted_foreground))
                 .into_any_element();
         }
-        if store.playlists.is_empty() && !store.loaded {
-            return match &store.error {
-                Some(error) => div()
+        if playlists.is_empty() && store.playlists.value().is_none() {
+            return match store.playlists.error() {
+                Some(_) => div()
                     .w_full()
                     .py(px(36.))
                     .flex()
@@ -542,7 +701,7 @@ impl RecommendPage {
                     .gap(px(8.))
                     .text_size(px(14.))
                     .text_color(colors.muted_foreground)
-                    .child(error.clone())
+                    .child("推荐加载失败，请重试")
                     .child(
                         Button::new("recommend-retry")
                             .child("重试")
@@ -552,28 +711,30 @@ impl RecommendPage {
                     )
                     .into_any_element(),
                 None => {
-                    centered_empty("images/empty/cm_empty_wuzuizen.png", "暂无推荐歌单", colors)
+                    centered_empty("images/empty/cm_empty_wuzuopin.png", "暂无推荐歌单", colors)
                         .into_any_element()
                 }
             };
         }
-        playlist_row(&store.playlists, columns, colors, "recommend-playlist", cx).into_any_element()
+        let row = RowLayout::new(available_width, playlists.len(), &self.playlists_scroll);
+        let cards = playlist_cards(playlists, &row, colors, "recommend-playlist", cx);
+        card_row("recommend-playlist", &row, cards, colors, cx).into_any_element()
     }
 }
 
-fn playlist_row(
+fn playlist_cards(
     playlists: &[RecommendedPlaylist],
-    columns: usize,
+    row: &RowLayout,
     colors: ColorTokens,
     id_prefix: &'static str,
     cx: &Context<RecommendPage>,
-) -> impl IntoElement {
-    div().flex().gap(px(CARD_GAP)).children(
-        playlists
-            .iter()
-            .take(columns)
-            .map(|playlist| recommended_card(playlist, colors, id_prefix, cx)),
-    )
+) -> Vec<AnyElement> {
+    playlists
+        .iter()
+        .map(|playlist| {
+            recommended_card(playlist, colors, id_prefix, row.card_width, cx).into_any_element()
+        })
+        .collect()
 }
 
 fn cover_shade() -> Background {
@@ -588,12 +749,14 @@ fn recommended_card(
     playlist: &RecommendedPlaylist,
     colors: ColorTokens,
     id_prefix: &'static str,
+    card_width: Pixels,
     cx: &Context<RecommendPage>,
 ) -> impl IntoElement {
     let playlist_id = playlist.id;
     let summary = playlist.to_summary();
     div()
-        .flex_1()
+        .flex_none()
+        .w(card_width)
         .min_w(px(0.))
         .flex()
         .flex_col()

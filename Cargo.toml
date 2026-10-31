@@ -24,6 +24,8 @@ symphonia = { version = "0.5.5", default-features = false, features = ["flac", "
 souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
 tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"] }
 anyhow = "1"
+log = "0.4"
+tracing-subscriber = "0.3"
 # 用于随机播放；gpui 依赖同一版本
 rand = "0.9"
 sha2 = "0.10"
@@ -38,6 +40,7 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62.2", features = ["Foundation", "Media", "Storage_Streams", "Win32_System_WinRT"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 raw-window-handle = "0.6"
@@ -47,6 +50,9 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSVi
 
 [dev-dependencies]
 futures = "0.3"
+
+[build-dependencies]
+embed-resource = "3.0.11"
 
 [profile.dev.package]
 gpui-pre = { opt-level = 3 }
@@ -66,4 +72,5 @@ codegen-units = 1
 [patch.crates-io]
 gpui-pre = { path = "vendor/gpui-pre" }
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }

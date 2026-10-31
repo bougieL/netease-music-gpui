@@ -9,16 +9,14 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_kit::base::{
-    Button, ColorTokens, IndexPath, InteractiveElementExt as _, Selectable, Theme,
-};
+use gpui_kit::base::{ColorTokens, IndexPath, InteractiveElementExt as _, Selectable, Theme};
 use gpui_kit::component::list::{List, ListDelegate, ListState};
 
 use super::{
     SURFACE_RADIUS, artist_label, format_duration, like_icon_path, quality_badge_path,
     side_panel::panel_height,
 };
-use crate::models::{PlayMode, Song};
+use crate::models::Song;
 use crate::playback::{PlaybackController, PlaybackEvent};
 use crate::state::library::MusicLibrary;
 use crate::ui::assets::{track_cover_image, track_cover_url};
@@ -156,10 +154,6 @@ impl Render for PlayQueue {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = Theme::global(cx).tokens.colors;
         let count = self.playback.read(cx).queue().len();
-        let state = self.playback.read(cx).snapshot();
-        let heart = state.mode == PlayMode::Heart || state.heart_loading;
-        let heart_loading = state.heart_loading;
-        let heart_error = state.heart_error.clone();
         if self.scroll_to_current {
             self.scroll_to_current = false;
             let index = self.playback.read(cx).queue_cursor().unwrap_or(0);
@@ -233,58 +227,6 @@ impl Render for PlayQueue {
                             )),
                     ),
             )
-            .when(heart || heart_error.is_some(), |panel| {
-                panel.child(
-                    div()
-                        .px(ROW_PADDING)
-                        .pb(px(12.))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.))
-                                .text_size(px(12.))
-                                .text_color(colors.muted_foreground)
-                                .child(heart_error.clone().unwrap_or_else(|| {
-                                    if heart_loading {
-                                        "正在获取心动推荐…".into()
-                                    } else {
-                                        "心动模式 · 红心歌曲与相似推荐".into()
-                                    }
-                                })),
-                        )
-                        .when(heart_error.is_some(), |row| {
-                            row.child(
-                                Button::new("heart-retry")
-                                    .aria_label("重试心动推荐")
-                                    .child("重试")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.playback.update(cx, |playback, cx| {
-                                            if playback.snapshot().mode == PlayMode::Heart {
-                                                playback.retry_heart_mode(cx);
-                                            } else {
-                                                playback.set_mode(PlayMode::Heart, cx);
-                                            }
-                                        });
-                                    })),
-                            )
-                        })
-                        .when(heart, |row| {
-                            row.child(
-                                Button::new("heart-exit")
-                                    .aria_label("退出心动模式")
-                                    .child("退出")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.playback.update(cx, |playback, cx| {
-                                            playback.exit_heart_mode(cx)
-                                        });
-                                    })),
-                            )
-                        }),
-                )
-            })
             .child(
                 div()
                     .flex_1()
@@ -325,7 +267,7 @@ impl ListDelegate for QueueDelegate {
         let is_current = self.playback.read(cx).queue_cursor() == Some(index);
         // 当前歌正在播放时按钮变成暂停，其余一律是播放键。
         let show_pause = is_current && self.playback.read(cx).is_play_requested();
-        let liked = self.library.read(cx).liked_song_ids.contains(&song.id);
+        let liked = self.library.read(cx).is_liked(song.id);
         let state = RowState {
             is_current,
             show_pause,

@@ -73,13 +73,44 @@ cargo test --locked heart_mode_can_load_real_recommendations -- --ignored
 python3 scripts/package.py
 ```
 
-macOS 生成 `target/bundle/NetEase Music.app`，可执行文件位于 `Contents/MacOS`，图标、图片和字体位于 `Contents/Resources/assets`；Windows 与 Linux 生成 `target/bundle/netease-music-gpui/`，里面包含可执行文件和 `assets/`。如果配置了自定义 Cargo target 目录，产物位于该目录的 `bundle/`。请分发完整应用包或目录，不要只复制可执行文件。脚本只构建本机平台（macOS 可用 `--target x86_64-apple-darwin` 交叉编译 Intel 版），不制作安装程序或收集额外的运行库。
+macOS 生成 `target/bundle/NetEase Music.app`，可执行文件位于 `Contents/MacOS`，图标、图片和字体位于 `Contents/Resources/assets`。
+
+Windows 使用免安装 ZIP 分发，生成 `target/bundle/netease-music-gpui-0.1.0-x86_64-pc-windows-msvc.zip`（版本和架构跟随当前构建）及同名 `.sha256` 校验文件，同时保留未压缩的 `target/bundle/netease-music-gpui/` 方便检查。ZIP 内有一个完整目录：
+
+```text
+netease-music-gpui/
+  netease-music-gpui.exe
+  assets/                  # 图片、字体、SVG，与 EXE 相邻
+  *.dll                    # 对应架构的 VC release 运行库
+  README.txt
+  build-info.json
+```
+
+用户完整解压后直接双击 EXE；无需 Rust、Python、管理员权限或另装 VC 运行库，release 不弹控制台。资源按 EXE 所在目录定位，与快捷方式的工作目录无关。登录与播放记录仍保存在 `%APPDATA%/NeteaseMusicGpui/`，缓存位于 `%LOCALAPPDATA%/NeteaseMusicGpui/Cache/`，不会放进 ZIP；升级时从托盘退出旧程序，再解压新版到新目录即可。
+
+Windows 的 EXE 图标和文件信息由 `build.rs` 在编译时嵌入，debug / release 均生效；版本跟随 `Cargo.toml`。`packaging/netease-music-gpui.ico` 从现有 macOS 图标 `packaging/163Music.icns` 转换，包含 16–256 像素的多种尺寸。GPUI 从 EXE 的图标资源 1 读取窗口图标，主窗口与弹窗另行设置原生标题；应用启动时设置固定 AppUserModelID，供任务栏识别同一个应用。
+
+构建机需要安装 Visual Studio 的 C++ 构建工具和 Windows SDK。脚本从 `VCToolsRedistDir` 或 `vswhere` 找到对应架构的官方 VC release CRT 并将 DLL 放到 EXE 旁；找不到就报错，避免生成缺运行库的包。也可以显式指定官方 CRT 目录：
+
+```powershell
+py -3 scripts/package.py --runtime-dir "C:\path\to\VC\Redist\MSVC\14.xx\x64\Microsoft.VC143.CRT"
+```
+
+Linux 生成 `target/bundle/netease-music-gpui/`，里面包含可执行文件和 `assets/`。
+
+如果配置了自定义 Cargo target 目录，产物位于该目录的 `bundle/`。请分发完整应用包、目录或 ZIP，不要只复制可执行文件。脚本只构建本机平台和架构（macOS 可用 `--target x86_64-apple-darwin` 交叉编译 Intel 版）；当前 Windows 方案是免安装目录，不自动注册 `orpheus://` 协议，也不创建开始菜单快捷方式。
 
 GitHub Actions（`.github/workflows/package.yml`）在推送 `v*` 标签时打包 macOS arm64/x64、Windows x64 与 Linux x64 并自动发布 Release，也支持在 Actions 页面手动触发；Linux 运行还需要系统提供 ALSA 和 Vulkan 运行库。
 
 所有项目资源都从外部目录读取。单独执行 `cargo build --release` 不会复制资源，应使用上述脚本生成可分发目录。
 
 macOS 包使用本地 ad-hoc 签名，没有 Developer ID 签名和公证。可以双击应用并扫码登录，无需配置环境变量。
+
+打包脚本的本地回归不构建 Rust、不联网、不启动窗口：
+
+```bash
+python -m unittest discover -s scripts -p test_package.py
+```
 
 ## 技术栈
 
@@ -94,45 +125,11 @@ macOS 包使用本地 ad-hoc 签名，没有 Developer ID 签名和公证。可�
 
 音频下载直接使用标准 `reqwest`；GPUI 图片请求使用 `reqwest-client` 适配器。适配器内部依赖 `gpui-pre-reqwest` 分支，因此两者各自复用客户端和连接池。
 
-## 目录结构
+## 项目结构
 
-```text
-src/
-├── main.rs                  初始化与应用组装
-├── api.rs                   网络客户端、Tokio 运行时及统一请求校验
-├── api/                     歌曲、歌单、推荐、消息接口与回归测试
-├── auth.rs                  二维码登录请求、扫码状态和凭据解析
-├── models/                  歌曲、歌单、用户及播放资源的数据模型
-├── state/                   账号、音乐库、歌单、推荐与搜索的共享状态
-│   └── library/collection.rs 收藏请求、部分成功记账与结果通知
-├── playback/
-│   ├── controller.rs        统一播放接口、队列和 GPUI 状态通知
-│   ├── engine.rs            音频设备、播放源、暂停和音量
-│   ├── stream.rs            音源组装、跳转和取消生命周期
-│   └── stream/
-│       ├── download.rs      HTTP Range 下载和字节缓存
-│       ├── decode.rs        Symphonia 解析、定位和解码
-│       ├── output.rs        PCM 队列与 f32 帧输出
-│       └── tests.rs         本地 HTTP 与音频回归测试
-└── ui/
-    ├── shell.rs             主窗口、导航事件和播放覆盖层
-    ├── shell/content.rs     页面生命周期、工具栏与侧栏布局
-    ├── login.rs             扫码登录与退出账号窗口
-    ├── sidebar.rs           侧栏
-    ├── pages/               页面
-    ├── components/          播放栏、浮层、通用表格及歌曲行展示
-    ├── comments/            评论加载、分页、输入框及评论页面
-    ├── now_playing/page/    歌词视图与两屏滚动协调
-    ├── assets.rs            资源加载与缩略图地址
-    └── theme.rs             字体与主题
+`api/` 负责接口，`models/` 负责类型和解析，`state/` 持有共享数据，`ui/` 订阅数据并渲染，`playback/` 管理队列、音频和缓存。页面进入时后台刷新，已有内容保留到新数据返回。
 
-assets/                      图标、图片和字体
-docs/architecture.md         模块职责与播放链路说明
-```
-
-共享业务状态由 GPUI Entity 管理，View 观察通知并渲染。界面通过 `PlaybackController` 提交播放命令，通过只读 `snapshot()` 获取状态；底层音频引擎不依赖 GPUI。
-
-详细设计见 [架构文档](docs/architecture.md)。
+架构约定与播放链路见 [docs/architecture.md](docs/architecture.md)。开发时默认向控制台输出请求状态与耗时，可用 `RUST_LOG=warn,netease_music_gpui=debug cargo run --locked` 调整日志级别。
 
 ## 开发验证
 

@@ -1,6 +1,12 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 mod api;
 mod auth;
 mod desktop;
+mod logging;
 mod models;
 mod persistence;
 mod playback;
@@ -13,7 +19,7 @@ use playback::PlaybackController;
 use state::{account::AccountState, library::MusicLibrary, song_counts::SongCounts};
 use ui::{
     assets::Assets,
-    components::{PlayerBar, SidePanel},
+    components::{PlayerBar, SidePanel, Toast, ToastHandle},
     events::{NavigationBus, NavigationBusHandle},
     now_playing::NowPlaying,
     shell::{MainContent, MainWindow},
@@ -21,11 +27,13 @@ use ui::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    logging::init();
+    log::info!("starting application");
     let assets = Assets::new()?;
     let persistence = Persistence::new()?;
     // 登录凭据只来自本地保存的会话；没有就进登录窗扫码。
     let cookie = persistence.load_session().unwrap_or_else(|error| {
-        eprintln!("读取登录凭据失败：{error}");
+        log::warn!("读取登录凭据失败：{error}");
         None
     });
     let has_session = cookie.is_some();
@@ -42,20 +50,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = open_url_tx.send(urls);
     });
     application.run(move |cx: &mut App| {
+        cx.set_app_identity(desktop::APP_ID, desktop::APP_NAME);
         cx.set_global(api);
         theme::load_fonts(cx).expect("failed to load external dolphin fonts");
         gpui_kit::init(cx);
         theme::init(cx);
-        let bounds = Bounds::centered(None, size(px(1060.), px(720.)), cx);
+        let bounds = Bounds::centered(None, main_window_size(cx), cx);
         // Dock 菜单在窗口构建后单独安装，需要拿到播放与音乐库 Entity。
         let mut desktop_handles = None;
         let (window, view) = gpui_kit::open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 // Wayland 按它匹配 desktop 条目，缺省为空时概览/Dock 没有图标。
-                app_id: Some(desktop::APP_ID.into()),
+                app_id: desktop::window_app_id().map(String::from),
                 app_owns_titlebar_drag: true,
                 titlebar: Some(TitlebarOptions {
+                    title: Some(desktop::APP_NAME.into()),
                     appears_transparent: true,
                     ..Default::default()
                 }),
@@ -67,6 +77,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // MainWindow 订阅一次接管，不再按来源各挂一条订阅。
                 let nav_bus = cx.new(|_| NavigationBus);
                 cx.set_global(NavigationBusHandle(nav_bus));
+                // 全局提示条：同样只有一个实体，谁都能弹一句话，窗口层负责画。
+                let toast = cx.new(|_| Toast::new());
+                cx.set_global(ToastHandle(toast));
                 desktop::configure_window(window, cx);
                 let playback =
                     cx.new(|cx| PlaybackController::new(window, persistence.clone(), cx));
@@ -135,4 +148,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .detach();
     });
     Ok(())
+}
+
+/// 主窗口的初始尺寸。
+///
+/// 设计尺寸是 1060×720，但不能超过显示器可用区域：gpui 选窗口位置时只检查请求
+/// 区域中心点是否落在显示器内，高 DPI 小屏（例如 1280×800@200%，逻辑只有
+/// 640×400）放不下 1060×720 也照样按原尺寸开窗，于是窗口比屏幕还大。
+/// 结果就是只能看到左上角一块：图片被画到可见区域之外，看起来像错位或不显示。
+fn main_window_size(cx: &App) -> Size<Pixels> {
+    let preferred = size(px(1060.), px(720.));
+    let Some(display) = cx.primary_display() else {
+        return preferred;
+    };
+    // 留出一点余量，窗口不要正好顶满可用区域。
+    let margin = px(16.);
+    let available = display.visible_bounds().size;
+    size(
+        preferred
+            .width
+            .min((available.width - margin * 2.).max(px(320.))),
+        preferred
+            .height
+            .min((available.height - margin * 2.).max(px(240.))),
+    )
 }

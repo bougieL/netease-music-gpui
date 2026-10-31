@@ -5,6 +5,10 @@ use gpui::*;
 use gpui_kit::base::input::{Input, InputEditorStyle, InputEvent, InputState};
 use gpui_kit::base::{ColorTokens, Root, Scrollbar, ScrollbarMode, Theme};
 
+// hide_traffic_lights 只在 macOS 上存在，这里也必须跟着条件编译，
+// 否则非 macOS 构建会在 import 处报 unresolved import。
+#[cfg(target_os = "macos")]
+use super::hide_traffic_lights;
 use crate::desktop;
 use crate::models::Song;
 use crate::state::library::{MusicLibrary, SongsCollected};
@@ -53,9 +57,10 @@ pub fn open_collect_window(parent: &Window, songs: Vec<Song>, cx: &mut App) {
     let display_id = parent.display(cx).map(|display| display.id());
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        app_id: Some(desktop::APP_ID.into()),
+        app_id: desktop::window_app_id().map(String::from),
         display_id,
         titlebar: Some(TitlebarOptions {
+            title: Some(format!("收藏到歌单 - {}", desktop::APP_NAME).into()),
             appears_transparent: true,
             ..Default::default()
         }),
@@ -65,12 +70,12 @@ pub fn open_collect_window(parent: &Window, songs: Vec<Song>, cx: &mut App) {
         ..Default::default()
     };
     let Some(library) = desktop::library(cx) else {
-        eprintln!("音乐库尚未就绪，无法打开收藏窗口");
+        log::warn!("音乐库尚未就绪，无法打开收藏窗口");
         return;
     };
     match gpui_kit::open_window(options, cx, move |window, cx| {
         #[cfg(target_os = "macos")]
-        super::hide_traffic_lights(window, true);
+        hide_traffic_lights(window, true);
         window.on_window_should_close(cx, |_, cx| {
             desktop::set_collect_window(None, cx);
             true
@@ -78,7 +83,7 @@ pub fn open_collect_window(parent: &Window, songs: Vec<Song>, cx: &mut App) {
         cx.new(|cx| CollectWindow::new(library, songs, window, cx))
     }) {
         Ok((window, _)) => desktop::set_collect_window(Some(window), cx),
-        Err(error) => eprintln!("打开收藏窗口失败：{error}"),
+        Err(error) => log::warn!("打开收藏窗口失败：{error}"),
     }
 }
 
@@ -195,7 +200,7 @@ impl CollectWindow {
                 self.creating = false;
                 self.close(window, cx);
             }
-            Err(message) => eprintln!("收藏失败：{message}"),
+            Err(message) => log::warn!("收藏失败：{message}"),
         }
         cx.notify();
     }
@@ -213,7 +218,7 @@ impl CollectWindow {
 
     fn playlist_rows(&self, colors: ColorTokens, cx: &Context<Self>) -> Vec<AnyElement> {
         let library = self.library.read(cx);
-        let mut rows = Vec::with_capacity(library.playlists.len() + 1);
+        let mut rows = Vec::with_capacity(library.playlists().len() + 1);
         if self.creating {
             rows.push(self.create_row(colors, cx));
         } else {
@@ -228,7 +233,7 @@ impl CollectWindow {
         }
         let playlists = library.favorite_playlist().into_iter().chain(
             library
-                .playlists
+                .playlists()
                 .iter()
                 .filter(|playlist| playlist.special_type != 5),
         );
@@ -337,6 +342,8 @@ impl Render for CollectWindow {
                             .flex()
                             .flex_col()
                             .overflow_y_scroll()
+                            // 横向手势不改写成竖向：一次滑动只认一个方向。
+                            .restrict_scroll_to_axis()
                             .track_scroll(&self.scroll)
                             .children(rows),
                     )
