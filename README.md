@@ -102,6 +102,24 @@ Linux 生成 `target/bundle/netease-music-gpui/`，里面包含可执行文件�
 
 GitHub Actions（`.github/workflows/package.yml`）在推送 `v*` 标签时打包 macOS arm64/x64、Windows x64 与 Linux x64 并自动发布 Release，也支持在 Actions 页面手动触发；Linux 运行还需要系统提供 ALSA 和 Vulkan 运行库。
 
+手动派发时默认只构建产物，不发 Release。要发版就带上这三个输入：
+
+| 输入 | 作用 |
+| --- | --- |
+| `publish_release` | 置为 `true` 才创建 Release；否则只跑构建 |
+| `release_tag` | Release 标签；留空则用 `nightly-<版本>-<日期>` |
+| `release_notes` | Release 正文（Markdown）；留空则退回 GitHub 自动生成的提交摘要 |
+
+正文按 [docs/release-notes-template.md](docs/release-notes-template.md) 写，中英双语。模板由人或 AI 每次实时填写，仓库里不保存生成正文的脚本 —— 措辞要跟着当次改动的实际内容走，写死反而会失真。
+
+命令行派发示例：
+
+```bash
+gh workflow run package.yml --repo bougieL/netease-music-gpui --ref main \
+  -f publish_release=true \
+  -f release_notes="$(cat release-notes.md)"
+```
+
 所有项目资源都从外部目录读取。单独执行 `cargo build --release` 不会复制资源，应使用上述脚本生成可分发目录。
 
 macOS 包使用本地 ad-hoc 签名，没有 Developer ID 签名和公证。可以双击应用并扫码登录，无需配置环境变量。

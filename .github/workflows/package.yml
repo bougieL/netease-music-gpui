@@ -2,6 +2,24 @@ name: Package
 
 on:
   workflow_dispatch:
+    inputs:
+      # 手动派发时默认只构建；发布到 Release 需要显式打开。
+      # A dispatched run only builds by default; publishing to a Release is opt-in.
+      publish_release:
+        description: "Publish the build to a GitHub Release"
+        type: boolean
+        default: false
+      release_tag:
+        description: "Tag for the Release (defaults to nightly-<version>-<date>)"
+        type: string
+        required: false
+      # 正文由调用方（AI 或人）按 docs/release-notes-template.md 写好后传入。
+      # The body is supplied by the caller (AI or human) following
+      # docs/release-notes-template.md.
+      release_notes:
+        description: "Release body in Markdown (see docs/release-notes-template.md)"
+        type: string
+        required: false
   push:
     tags:
       - "v*"
@@ -118,20 +136,51 @@ jobs:
           path: netease-music-gpui-linux-x64.tar.gz
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # tag push 时发正式版；手动派发且勾选了 publish_release 时发 nightly。
+    # Formal release on a tag push; a nightly one when dispatched with publish_release.
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true
     needs: [macos-arm64, macos-x64, windows-x64, linux-x64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
           path: dist
-      - name: Create release
+      - name: Decide release tag
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --title "NetEase Music $GITHUB_REF_NAME" \
-            --generate-notes
+          set -euo pipefail
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            tag="${{ inputs.release_tag }}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            version=$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['package']['version'])")
+            tag="nightly-${version}-$(date -u +%Y%m%d)"
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+      - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          # 正文来自 dispatch 输入；为空时退回 GitHub 自动生成的提交摘要。
+          # The body comes from the dispatch input; empty means fall back to
+          # GitHub's auto-generated commit summary.
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_NOTES" > release-notes.md
+          if [ -s release-notes.md ]; then
+            gh release create "$TAG" dist/* \
+              --title "网易云音乐 GPUI $TAG" \
+              --notes-file release-notes.md \
+              --target "${{ github.sha }}"
+          else
+            gh release create "$TAG" dist/* \
+              --title "网易云音乐 GPUI $TAG" \
+              --generate-notes \
+              --target "${{ github.sha }}"
+          fi
