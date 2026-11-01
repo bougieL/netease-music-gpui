@@ -173,14 +173,20 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$RELEASE_NOTES" > release-notes.md
+          # nightly 不抢 "Latest release" 的位置，标成预发布。
+          # Nightlies are marked prerelease so they do not become the "Latest" release.
+          prerelease=""
+          case "$TAG" in nightly-*) prerelease="--prerelease" ;; esac
           if [ -s release-notes.md ]; then
             gh release create "$TAG" dist/* \
               --title "网易云音乐 GPUI $TAG" \
               --notes-file release-notes.md \
-              --target "${{ github.sha }}"
+              --target "${{ github.sha }}" \
+              $prerelease
           else
             gh release create "$TAG" dist/* \
               --title "网易云音乐 GPUI $TAG" \
               --generate-notes \
-              --target "${{ github.sha }}"
+              --target "${{ github.sha }}" \
+              $prerelease
           fi
