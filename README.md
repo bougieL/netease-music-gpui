@@ -44,6 +44,29 @@ python3 scripts/package.py
 
 macOS 生成 `.app`，Windows 生成 ZIP，Linux 生成 `tar.gz`。请分发完整的应用或压缩包；Linux 包需要兼容的系统库和图形环境。构建选项和平台说明见 [打包脚本说明](scripts/README.md)。
 
+## 每日构建与发版 / Nightly builds and releases
+
+这个 fork 每天把上游 `AMagicPear/netease-music-gpui` 的最新改动带进来，并在 Actions 页面手动派发构建与发版。
+This fork carries the latest upstream changes from `AMagicPear/netease-music-gpui` every day and builds and publishes from the Actions tab.
+
+GitHub Actions（`.github/workflows/package.yml`）打包 macOS arm64/x64、Windows x64 与 Linux x64 四个平台。手动派发时默认只构建产物，不发 Release；要发版就带上这三个输入：
+
+| 输入 | 作用 |
+| --- | --- |
+| `publish_release` | 置为 `true` 才创建 Release；否则只跑构建 |
+| `release_tag` | Release 标签；留空则用 `nightly-<版本>-<日期>` |
+| `release_notes` | Release 正文（Markdown）；留空则退回 GitHub 自动生成的提交摘要 |
+
+正文按 [docs/release-notes-template.md](docs/release-notes-template.md) 写，中英双语。模板由人或 AI 每次实时填写，仓库里不保存生成正文的脚本 —— 措辞要跟着当次改动的实际内容走，写死反而会失真。
+
+命令行派发示例：
+
+```bash
+gh workflow run package.yml --repo bougieL/netease-music-gpui --ref main \
+  -f publish_release=true \
+  -f release_notes="$(cat release-notes.md)"
+```
+
 ## 技术栈
 
 | 依赖 | 用途 |
