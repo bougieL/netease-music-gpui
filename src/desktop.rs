@@ -15,6 +15,15 @@ use crate::playback::PlaybackEvent;
 use crate::state::library::MusicLibrary;
 use crate::ui::shell::MainWindow;
 
+/// Linux 由应用绘制标题栏；其他平台沿用 GPUI 默认的窗口装饰。
+pub fn window_decorations() -> Option<WindowDecorations> {
+    if cfg!(target_os = "linux") {
+        Some(WindowDecorations::Client)
+    } else {
+        None
+    }
+}
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
@@ -511,6 +520,7 @@ pub fn show_window(cx: &mut App) {
         window_bounds: Some(desktop.bounds),
         app_id: window_app_id().map(String::from),
         app_owns_titlebar_drag: true,
+        window_decorations: window_decorations(),
         titlebar: Some(TitlebarOptions {
             title: Some(APP_NAME.into()),
             appears_transparent: true,

@@ -198,8 +198,11 @@ impl NowPlayingPage {
         self.now_playing.read(cx).is_expanded()
     }
 
-    pub(in crate::ui) fn vinyl_overlays(&self) -> [Entity<Vinyl>; 2] {
-        [self.vinyl.clone(), self.summary_vinyl.clone()]
+    pub(in crate::ui) fn vinyl_overlays(&self, cx: &App) -> [AnyElement; 2] {
+        [
+            self.vinyl.read(cx).overlay(),
+            self.summary_vinyl.read(cx).overlay(),
+        ]
     }
 
     /// 展开时的副作用：回到歌词页起点并同步当前歌曲。
@@ -738,8 +741,8 @@ impl Render for NowPlayingPage {
                                     // 只采样滚轮事件、不拦位移：位移照旧由平台滚动和
                                     // 评论列表分。延迟吸附靠这份采样判手停了没有、
                                     // 以及最后是往哪推的。
-                                    .on_scroll_wheel(cx.listener(
-                                        |this, event: &ScrollWheelEvent, window, cx| {
+                                    .on_scroll(cx.listener(
+                                        |this, event: &ScrollEvent, window, cx| {
                                             let now = cx.background_executor().now();
                                             // 微小位移也代表用户接管，不能等动画的偏移容差判定。
                                             if event.delta.pixel_delta(window.line_height()).y

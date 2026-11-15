@@ -19,13 +19,13 @@ use crate::playback::{PlaybackController, PlaybackEvent};
 use crate::state::library::MusicLibrary;
 
 /// macOS 顶部给系统红绿灯留白；Windows 的窗口按钮画在页头里，也要和窗口上边缘留点空白；
-/// Linux 没有系统标题栏，透明标题栏之下需要一点顶部空隙。
+/// Linux 的标题栏由应用自己绘制，同样需要一点顶部空隙。
 pub(super) const HEADER_TOP_INSET: f32 = if cfg!(target_os = "macos") {
     30.
-} else if cfg!(target_os = "windows") {
+} else if cfg!(any(target_os = "linux", target_os = "windows")) {
     12.
 } else {
-    8.
+    0.
 };
 pub(super) const HEADER_HEIGHT: f32 = HEADER_TOP_INSET + 42.;
 
@@ -78,8 +78,23 @@ impl MainWindow {
                 }
             },
         );
-        // 封面预取只跟随歌曲和预加载候选，不处理位置推进。
-        let playback_subscription = cx.subscribe(&playback, |this, _, event, cx| {
+        // 播放错误提示和封面预取共用订阅，不处理位置推进。
+        let mut reported_playback_error = None;
+        let playback_subscription = cx.subscribe(&playback, move |this, playback, event, cx| {
+            if matches!(event, PlaybackEvent::SnapshotChanged) {
+                let snapshot = playback.read(cx).snapshot();
+                let failure = snapshot
+                    .error
+                    .as_ref()
+                    .map(|message| (snapshot.revision, message.clone()));
+                // 每次加载只提示一次；重试同一首歌会有新 revision，仍能再次报错。
+                if failure != reported_playback_error {
+                    if let Some((_, message)) = &failure {
+                        Toast::show(cx, format!("播放失败：{message}"));
+                    }
+                    reported_playback_error = failure;
+                }
+            }
             if matches!(
                 event,
                 PlaybackEvent::SnapshotChanged | PlaybackEvent::PreloadChanged
@@ -205,7 +220,7 @@ impl Render for MainWindow {
         let colors = Theme::global(cx).tokens.colors;
         let tint = self.playlist_tint(window, cx);
         let playback = self.playback.clone();
-        div()
+        let content = div()
             .track_focus(&self.focus_handle)
             .id("main-window")
             .on_action(move |action: &PlayNext, _window, cx| {
@@ -267,10 +282,11 @@ impl Render for MainWindow {
                         .flex_shrink(0.),
                 ),
             )
-            .child(self.player_bar.read(cx).vinyl_overlay())
-            .children(self.now_playing_page.read(cx).vinyl_overlays())
+            .child(self.player_bar.read(cx).vinyl_overlay(cx))
+            .children(self.now_playing_page.read(cx).vinyl_overlays(cx))
             // 提示条排在最后：它是全窗口最上层的那一层。
-            .child(self.toast.clone())
+            .child(self.toast.clone());
+        super::components::window_frame(content)
     }
 }
 

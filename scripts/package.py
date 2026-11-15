@@ -1,4 +1,4 @@
-"""Build a native app; Windows distributions are self-contained portable ZIPs."""
+"""Build and package the application for the current platform."""
 
 import argparse
 import hashlib
@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tarfile
 import zipfile
 
 
@@ -69,6 +70,15 @@ def archive_windows(folder, archive):
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     checksum = archive.with_name(archive.name + ".sha256")
     checksum.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+
+
+def archive_linux(folder, archive):
+    with tarfile.open(archive, "w:gz") as output:
+        output.add(folder, arcname=folder.name)
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    archive.with_name(archive.name + ".sha256").write_text(
+        f"{digest}  {archive.name}\n", encoding="utf-8"
+    )
 
 
 def add_windows_distribution(output, host, version, runtime):
@@ -138,9 +148,8 @@ def assemble(root, executable, output, platform, version):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", metavar="TRIPLE",
-                        help="override the cargo target triple, e.g. x86_64-apple-darwin on macOS")
     parser.add_argument("--runtime-dir", type=Path, help="Windows official VC release CRT directory")
+    parser.add_argument("--target", help="Cargo target triple (cross-compilation is only supported on macOS)")
     args = parser.parse_args()
     if sys.platform not in ("darwin", "win32", "linux"):
         raise SystemExit("Run this script on macOS, Windows or Linux to build for that platform")
@@ -154,8 +163,8 @@ def main():
         ["rustc", "-vV"], text=True
     ).splitlines() if line.startswith("host: "))
     build_target = args.target or host
-    if sys.platform != "darwin" and build_target != host:
-        raise SystemExit("Cross compilation is only supported on macOS")
+    if build_target != host and not (sys.platform == "darwin" and build_target in ("aarch64-apple-darwin", "x86_64-apple-darwin")):
+        raise SystemExit("Cross-compilation is only supported between macOS architectures")
     runtime = find_windows_runtime(host, args.runtime_dir) if sys.platform == "win32" else None
     subprocess.run(["cargo", "build", "--locked", "--release", "--bin", package["name"],
                     "--target", build_target], cwd=root, check=True)
@@ -169,8 +178,10 @@ def main():
         if runtime is not None:
             add_windows_distribution(output, host, package["version"], runtime)
         if sys.platform == "darwin":
-            # 本地 ad-hoc 签名；正式分发时再使用 Developer ID 并公证。
-            subprocess.run(["codesign", "--force", "--sign", "-", str(output)], check=True)
+            # 未指定证书时保留本地 ad-hoc 签名。CI 可通过环境变量指定 Apple 身份。
+            identity = os.environ.get("APPLE_SIGNING_IDENTITY") or "-"
+            subprocess.run(["codesign", "--force", "--sign", identity, str(output)], check=True)
+            subprocess.run(["codesign", "--verify", "--strict", "--verbose=2", str(output)], check=True)
         if destination.exists():
             # Refuse to recursively replace a symlink pointing outside the bundle directory.
             if destination.resolve().parent != destination.parent.resolve():
@@ -181,6 +192,11 @@ def main():
     if sys.platform == "win32":
         archive = destination.parent / f"{package['name']}-{package['version']}-{host}.zip"
         archive_windows(destination, archive)
+        print(archive)
+        print(archive.with_name(archive.name + ".sha256"))
+    elif sys.platform == "linux":
+        archive = destination.parent / f"{package['name']}-{package['version']}-{host}.tar.gz"
+        archive_linux(destination, archive)
         print(archive)
         print(archive.with_name(archive.name + ".sha256"))
 

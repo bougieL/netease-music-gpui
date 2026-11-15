@@ -1,8 +1,8 @@
-# netease-music-gpui
+# NetEase-Music-GPUI
 
-使用 Rust 和 [GPUI](https://gpui.rs/) 复刻网易云音乐桌面界面的练手项目，逐步接入真实账号、歌单和歌曲播放，学习原生 UI、共享状态与异步音频处理。
+使用 Rust 和 [GPUI Fast](https://github.com/longbridge/gpui-fast) 复刻网易云音乐桌面界面的练手项目，逐步接入真实账号、歌单和歌曲播放，学习原生 UI、共享状态与异步音频处理。
 
-项目仍在开发中，主要在 macOS 上开发和验证，其他平台尚未验证。
+项目仍在开发中，主要在 macOS 上开发和验证。此分支正在迁移到 GPUI Fast；Windows、Linux 的迁移结果仍需在对应平台验证。
 
 ![GPUI 原生实现的网易云音乐界面](docs/images/screenshot.png)
 
@@ -12,22 +12,11 @@
 
 ## 当前功能
 
-- 点击顶部头像或昵称，用网易云音乐 App 扫码登录；保存会话并恢复账号资料、头像和会员信息，支持退出登录。
-- 推荐页展示每日推荐入口、推荐歌单、私人雷达和精选活动，支持刷新与打开歌单。
-- 加载个人歌单与「我喜欢的音乐」，展示真实歌曲、封面、创建者和喜欢状态；支持收藏歌曲及创建歌单后收藏。
-- 虚拟化歌曲列表，支持排序和拖动标题／专辑列分界线。
-- 歌单列表的音质徽章取 `song_detail` 的 `privileges.playMaxBrLevel`，标出平台为这首歌提供的最高档位（含超清母带、臻音、沉浸声、全景声）；该字段不随登录态变化，实际能否播放仍取决于账号权限。
-- 选歌、播放全部、暂停／继续、上一首／下一首，以及播完自动播放下一首。
-- 播放列表独立于页面歌单：选歌时复制一份，洗牌、插入和之后的页面变化都只影响它。
-- 播放队列侧面板支持查看队列、选歌、下一首插入和收藏。
-- 心动模式：登录后点击推荐页入口，混合播放红心歌曲与相似推荐，临近队尾自动补曲；支持失败重试、取消与退出，并随播放记录恢复。
-- 四种播放方式：顺序播放、单曲循环、列表循环、随机播放（切换到随机时把列表洗一遍，之后按这个顺序播）；播放栏左侧按钮循环切换，选择随播放缓存保留。
-- 选择的音质同样写入播放缓存，下次启动沿用。
-- HTTP Range 分段缓存和后台解码，拖动后优先下载目标区间；切换页面不会停止播放。
-- 播放控制接口支持接口提供的全部九档音质，播放栏提供常用音质选项；实际返回的音质可能随账号权限和资源降级。
-- 播放失败后点击播放可重试，音量气泡支持拖动调整音量。
-- 播放栏展示歌曲信息、红心计数和评论计数。
-- 展开专辑歌词页后显示旋转唱片、逐行歌词和译文；支持点击歌词跳转、手动滚动后恢复跟随，以及歌曲评论分页加载。
+- **登录和听歌**：使用网易云音乐 App 扫码登录，查看个人歌单和「我喜欢的音乐」，选择歌曲播放。
+- **发现音乐**：浏览每日推荐、推荐歌单和私人雷达，也可以开启心动模式，听红心歌曲和相似推荐。
+- **管理播放**：查看播放队列、插入下一首，选择循环、随机播放和音质；播放进度和设置会保留到下次使用。
+- **看歌词和评论**：展开播放页欣赏旋转唱片和逐行歌词，点击歌词跳转，还可以查看歌曲评论。
+- **整理歌单**：收藏歌曲、创建歌单，在歌单中搜索和排序。
 
 ## 运行
 
@@ -40,101 +29,26 @@ python3 scripts/prepare_gpui.py
 cargo run --locked
 ```
 
-准备脚本下载固定版本的 GPUI 并应用本地补丁（图片 GPU 旋转、背景模糊、SVG 应用字体）；首次构建和补丁更新后运行即可。
+准备脚本下载固定版本的 GPUI Fast 并应用本地补丁（图片 GPU 旋转、背景模糊、SVG 应用字体、文本空白处理）；首次构建和补丁更新后运行即可。
 仓库只保存补丁，生成的依赖源码不进入 Git。详情见 [GPUI 补丁说明](vendor/README.md)。
 
-启动后点击顶部头像或昵称，使用网易云音乐 App 扫描二维码并在手机上确认。二维码过期或请求失败时可以刷新；关闭扫码窗口会停止轮询。登录成功后自动加载个人歌单，下次启动恢复登录。再次点击头像可退出登录，删除本地会话并清空账号和个人歌单状态；播放队列与播放记录保留。
-
-扫码凭据原子保存到应用数据目录的 `session.cookie`：macOS 为 `~/Library/Application Support/NeteaseMusicGpui/`，Windows 为 `%APPDATA%/NeteaseMusicGpui/`，Linux 为 `$XDG_DATA_HOME/netease-music-gpui/`（默认 `~/.local/share/netease-music-gpui/`）。Unix 文件权限为 `0600`，内容是未加密的登录 Cookie，请勿分享该文件。
-
-早先的 `COOKIE` 环境变量启动凭据已移除：未保存会话时启动会直接进入登录窗。
-
-应用不会读取 `.env`。Cookie 属于登录凭据，请勿提交到仓库。
-
-二维码接口可以单独检查（需要网络，只请求未授权二维码，不使用账号凭据）：
-
-```bash
-cargo test --locked qr_endpoint_returns_pending_login -- --ignored
-```
-
-心动模式需要「我喜欢的音乐」非空，推荐顺序由服务端生成。进入后按推荐顺序播放；再次点击入口、播放栏红心模式按钮或队列中的「退出」可结束心动模式，恢复此前的普通播放方式。播放其他歌单、清空队列或切换账号也会结束心动会话。暂停期间收到的新推荐不会自动开播。补曲失败可在入口或队列中重试；播放权限仍以账号和歌曲资源为准。
-
-心动接口回归测试（需要登录会话和非空红心歌单）：
-
-```bash
-cargo test --locked heart_mode_can_load_real_recommendations -- --ignored
-```
+启动后使用网易云音乐 App 扫码登录。登录会话保存在本地，请勿分享或提交 `session.cookie`。
 
 ## 打包
 
-在 macOS、Windows 或 Linux 上安装 Python 3.9+，运行以下命令构建当前平台的 release 并复制资源（Windows 也可以使用 `py -3`）：
+在目标平台运行以下命令，产物位于 `target/bundle/`（Windows 可用 `py -3`）：
 
 ```bash
 python3 scripts/package.py
 ```
 
-macOS 生成 `target/bundle/NetEase Music.app`，可执行文件位于 `Contents/MacOS`，图标、图片和字体位于 `Contents/Resources/assets`。
-
-Windows 使用免安装 ZIP 分发，生成 `target/bundle/netease-music-gpui-0.1.0-x86_64-pc-windows-msvc.zip`（版本和架构跟随当前构建）及同名 `.sha256` 校验文件，同时保留未压缩的 `target/bundle/netease-music-gpui/` 方便检查。ZIP 内有一个完整目录：
-
-```text
-netease-music-gpui/
-  netease-music-gpui.exe
-  assets/                  # 图片、字体、SVG，与 EXE 相邻
-  *.dll                    # 对应架构的 VC release 运行库
-  README.txt
-  build-info.json
-```
-
-用户完整解压后直接双击 EXE；无需 Rust、Python、管理员权限或另装 VC 运行库，release 不弹控制台。资源按 EXE 所在目录定位，与快捷方式的工作目录无关。登录与播放记录仍保存在 `%APPDATA%/NeteaseMusicGpui/`，缓存位于 `%LOCALAPPDATA%/NeteaseMusicGpui/Cache/`，不会放进 ZIP；升级时从托盘退出旧程序，再解压新版到新目录即可。
-
-Windows 的 EXE 图标和文件信息由 `build.rs` 在编译时嵌入，debug / release 均生效；版本跟随 `Cargo.toml`。`packaging/netease-music-gpui.ico` 从现有 macOS 图标 `packaging/163Music.icns` 转换，包含 16–256 像素的多种尺寸。GPUI 从 EXE 的图标资源 1 读取窗口图标，主窗口与弹窗另行设置原生标题；应用启动时设置固定 AppUserModelID，供任务栏识别同一个应用。
-
-构建机需要安装 Visual Studio 的 C++ 构建工具和 Windows SDK。脚本从 `VCToolsRedistDir` 或 `vswhere` 找到对应架构的官方 VC release CRT 并将 DLL 放到 EXE 旁；找不到就报错，避免生成缺运行库的包。也可以显式指定官方 CRT 目录：
-
-```powershell
-py -3 scripts/package.py --runtime-dir "C:\path\to\VC\Redist\MSVC\14.xx\x64\Microsoft.VC143.CRT"
-```
-
-Linux 生成 `target/bundle/netease-music-gpui/`，里面包含可执行文件和 `assets/`。
-
-如果配置了自定义 Cargo target 目录，产物位于该目录的 `bundle/`。请分发完整应用包、目录或 ZIP，不要只复制可执行文件。脚本只构建本机平台和架构（macOS 可用 `--target x86_64-apple-darwin` 交叉编译 Intel 版）；当前 Windows 方案是免安装目录，不自动注册 `orpheus://` 协议，也不创建开始菜单快捷方式。
-
-GitHub Actions（`.github/workflows/package.yml`）在推送 `v*` 标签时打包 macOS arm64/x64、Windows x64 与 Linux x64 并自动发布 Release，也支持在 Actions 页面手动触发；Linux 运行还需要系统提供 ALSA 和 Vulkan 运行库。
-
-手动派发时默认只构建产物，不发 Release。要发版就带上这三个输入：
-
-| 输入 | 作用 |
-| --- | --- |
-| `publish_release` | 置为 `true` 才创建 Release；否则只跑构建 |
-| `release_tag` | Release 标签；留空则用 `nightly-<版本>-<日期>` |
-| `release_notes` | Release 正文（Markdown）；留空则退回 GitHub 自动生成的提交摘要 |
-
-正文按 [docs/release-notes-template.md](docs/release-notes-template.md) 写，中英双语。模板由人或 AI 每次实时填写，仓库里不保存生成正文的脚本 —— 措辞要跟着当次改动的实际内容走，写死反而会失真。
-
-命令行派发示例：
-
-```bash
-gh workflow run package.yml --repo bougieL/netease-music-gpui --ref main \
-  -f publish_release=true \
-  -f release_notes="$(cat release-notes.md)"
-```
-
-所有项目资源都从外部目录读取。单独执行 `cargo build --release` 不会复制资源，应使用上述脚本生成可分发目录。
-
-macOS 包使用本地 ad-hoc 签名，没有 Developer ID 签名和公证。可以双击应用并扫码登录，无需配置环境变量。
-
-打包脚本的本地回归不构建 Rust、不联网、不启动窗口：
-
-```bash
-python -m unittest discover -s scripts -p test_package.py
-```
+macOS 生成 `.app`，Windows 生成 ZIP，Linux 生成 `tar.gz`。请分发完整的应用或压缩包；Linux 包需要兼容的系统库和图形环境。构建选项和平台说明见 [打包脚本说明](scripts/README.md)。
 
 ## 技术栈
 
 | 依赖 | 用途 |
 | --- | --- |
-| GPUI / gpui-kit | 原生窗口、布局、组件与 Entity 状态管理 |
+| gpui-fast 0.1.15 / gpui-kit 0.9.1 | 原生窗口、布局、组件与 Entity 状态管理 |
 | ncm-api-rs | 网易云账号、歌单、歌曲详情和播放地址接口 |
 | Tokio / reqwest | 异步网络请求与音频下载 |
 | CPAL | 音频设备与直接 PCM 输出 |

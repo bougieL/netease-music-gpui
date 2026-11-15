@@ -64,6 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Wayland 按它匹配 desktop 条目，缺省为空时概览/Dock 没有图标。
                 app_id: desktop::window_app_id().map(String::from),
                 app_owns_titlebar_drag: true,
+                window_decorations: desktop::window_decorations(),
                 titlebar: Some(TitlebarOptions {
                     title: Some(desktop::APP_NAME.into()),
                     appears_transparent: true,

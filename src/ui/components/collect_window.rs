@@ -65,6 +65,7 @@ pub fn open_collect_window(parent: &Window, songs: Vec<Song>, cx: &mut App) {
             ..Default::default()
         }),
         app_owns_titlebar_drag: true,
+        window_decorations: desktop::window_decorations(),
         is_resizable: false,
         is_minimizable: false,
         ..Default::default()
@@ -302,7 +303,7 @@ impl Render for CollectWindow {
         } else {
             "收藏到歌单".to_owned()
         };
-        div()
+        let content = div()
             .size_full()
             .flex()
             .flex_col()
@@ -350,7 +351,8 @@ impl Render for CollectWindow {
                             .children(rows),
                     )
                     .child(Scrollbar::vertical(&self.scroll).mode(ScrollbarMode::Always)),
-            )
+            );
+        super::window_frame(content)
     }
 }
 
