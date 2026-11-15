@@ -10,3 +10,14 @@
              }
              .with_context(|| {
                  format!(
+--- a/vendor/gpui-fast-windows/src/fast/frame.rs
++++ b/vendor/gpui-fast-windows/src/fast/frame.rs
+@@ -298,6 +298,8 @@
+             }
+             // Upstream draws nothing for surfaces on Windows either.
+             PrimitiveBatch::Surfaces(_) => Ok(()),
++            // Backdrop sampling is currently Metal-only.
++            PrimitiveBatch::BackdropBlurs(_blurs) => Ok(()),
+         }
+         .with_context(|| scene_too_large(scene))?;
+     }
