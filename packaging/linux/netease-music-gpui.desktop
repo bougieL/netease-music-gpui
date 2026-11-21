@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=NetEase Music
+Name[zh_CN]=网易云音乐
+GenericName=Music Player
+GenericName[zh_CN]=音乐播放器
+Comment=Play NetEase Music
+Comment[zh_CN]=播放网易云音乐
+Exec=netease-music-gpui
+Icon=netease-music-gpui
+Terminal=false
+Categories=AudioVideo;Audio;Player;Music;
+Keywords=Music;Audio;Player;音乐;网易云;网易云音乐;

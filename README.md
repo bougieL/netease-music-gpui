@@ -44,12 +44,18 @@ python3 scripts/package.py
 
 macOS 生成 `.app`，Windows 生成 ZIP，Linux 生成 `tar.gz`。请分发完整的应用或压缩包；Linux 包需要兼容的系统库和图形环境。构建选项和平台说明见 [打包脚本说明](scripts/README.md)。
 
+Linux 产物还能再打成 RPM（需要 `rpmbuild`），产物在 `dist/`，可以直接用 `dnf install` 安装：
+
+```bash
+python3 scripts/build_rpm.py
+```
+
 ## 每日构建与发版 / Nightly builds and releases
 
 这个 fork 每天把上游 `AMagicPear/netease-music-gpui` 的最新改动带进来，并在 Actions 页面手动派发构建与发版。
 This fork carries the latest upstream changes from `AMagicPear/netease-music-gpui` every day and builds and publishes from the Actions tab.
 
-GitHub Actions（`.github/workflows/package.yml`）打包 macOS arm64/x64、Windows x64 与 Linux x64 四个平台。手动派发时默认只构建产物，不发 Release；要发版就带上这三个输入：
+GitHub Actions（`.github/workflows/package.yml`）打包 macOS arm64/x64、Windows x64 与 Linux x64 四个平台，Linux 产物再打成 RPM 一起发布。手动派发时默认只构建产物，不发 Release；要发版就带上这三个输入：
 
 | 输入 | 作用 |
 | --- | --- |
